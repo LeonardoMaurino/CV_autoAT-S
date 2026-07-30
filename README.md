@@ -1,2 +1,8 @@
 # CV_autoAT-S
-This project automates the job application workflow by searching for newly posted LinkedIn jobs, organizing the results in Google Sheets, generating AI-powered resume adaptations, and sending Telegram notifications.
+Features
+Searches LinkedIn jobs from the last hour
+AI-powered resume customization
+Google Sheets integration
+Google Docs generation for AI outputs
+Telegram notifications
+Built entirely with n8n for u to use with your favorite LLM
