@@ -1,0 +1,54 @@
+{
+  "name": "CV_autoAT-S - alerta de erro",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a3c22984-4214-4ed2-bbd8-533743ad887c",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "chatId": "SEU_CHAT_ID",
+        "text": "=❌ <b>{{ $json.workflow.name }}</b> falhou\n\nNó: {{ $json.execution?.lastNodeExecuted ?? 'trigger' }}\nErro: {{ String($json.execution?.error?.message ?? $json.trigger?.error?.message ?? 'sem detalhes').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }}\n\n{{ $json.execution?.url ?? '' }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "17375ea0-6a12-4407-adc2-7ed3b658f67e",
+      "name": "Avisa no Telegram"
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Avisa no Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "pinData": {},
+  "active": false,
+  "tags": []
+}

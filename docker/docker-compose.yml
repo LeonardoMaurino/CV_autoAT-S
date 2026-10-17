@@ -1,0 +1,52 @@
+# n8n + task runner (JavaScript e Python) em modo external.
+#
+# Primeira vez: copie .env.example para .env, troque o token e rode   docker compose up -d --build   (nesta pasta)
+# Os dois containers sobem sozinhos quando o Docker Desktop inicia (restart: unless-stopped).
+#
+# Os dados do n8n (workflows, credenciais, histórico) ficam no volume n8n_data, fora dos containers:
+# apagar ou recriar os containers NÃO apaga os dados. Faça backup do volume antes de atualizar.
+#
+# Atualizar o n8n: trocar a versão nas DUAS imagens (n8n aqui e o FROM do Dockerfile, que precisam
+# ser da mesma versão), fazer backup do volume antes, e rodar "docker compose up -d --build".
+#
+# Módulos que o Python pode importar: n8n-task-runners.json. A biblioteca padrão está liberada inteira ("*")
+# porque o runner apaga da memória os módulos fora da lista antes de cada execução, e aí pandas/matplotlib
+# quebram ("metaclass conflict"). O runner fica num container separado, sem acesso aos dados do n8n.
+# Pacotes de fora (pip) liberados: N8N_RUNNERS_EXTERNAL_ALLOW (instalados pelo Dockerfile).
+# O token que liga o n8n ao runner fica no arquivo .env desta pasta.
+
+name: cv-autoats
+
+services:
+  n8n:
+    image: n8nio/n8n:2.9.4
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - N8N_RUNNERS_MODE=external
+      - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
+      - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN:?defina N8N_RUNNERS_AUTH_TOKEN no arquivo .env}
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  runners:
+    # imagem própria: n8nio/runners:2.9.4 + pandas + matplotlib (ver Dockerfile desta pasta)
+    build: .
+    image: n8n-runners-python:2.9.4
+    container_name: n8n-runners
+    restart: unless-stopped
+    depends_on:
+      - n8n
+    environment:
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - N8N_RUNNERS_TASK_BROKER_URI=http://n8n:5679
+      - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN:?defina N8N_RUNNERS_AUTH_TOKEN no arquivo .env}
+      - N8N_RUNNERS_AUTO_SHUTDOWN_TIMEOUT=15
+    volumes:
+      - ./n8n-task-runners.json:/etc/n8n-task-runners.json:ro
+
+volumes:
+  n8n_data:

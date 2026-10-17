@@ -1,0 +1,4 @@
+# segredos e backups nunca vão pro repositório
+.env
+*.tar
+backup/

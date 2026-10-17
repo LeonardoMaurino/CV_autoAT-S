@@ -1,0 +1,544 @@
+{
+  "name": "CV_autoAT-S",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## V3\nthis approach is way simpler, free and faster, but we will use other LLM features out of N8N\n\n**v3:** no missed jobs between runs, no duplicates, Telegram in HTML (no more `_` workaround), error alerts, tags people on Telegram by job area\n\n**v3.1:** runs every 30 min (jobs from the last 30 min), 5 jobs per search, ATS keywords in the prompt, applicants count in the message",
+        "height": 304,
+        "width": 352,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -144,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "4e8ee331-d871-42fd-b122-ee6731e2040c",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## first things first\nopen the **Config** node and paste your LinkedIn search links there (as many as you want).\n\nthe time filter and sorting are set automatically. the same node sets who gets tagged on Telegram for each job area (RPA, infra, dev / IA / data)",
+        "height": 304,
+        "width": 288,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        208,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "6a86e960-7c44-4ad9-8e05-d322f601cc08",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## scraper\n**Vagas novas** keeps only real new jobs: drops old ones (Apify fills the result with them when the search is short), drops repeats, and caps at 10 per run",
+        "height": 304,
+        "width": 368,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        496,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "f6e92f70-2964-4801-bdd5-0db9d45803a1",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "in this version N8N only collects job information, structures the prompt and the data, and lists every relevant information in a google sheet. from here on I chose to stick with a personalized gem on gemini, with an ATS prompt. it's better because we don't get a lot of free tokens + it's easier to get a good looking CV with LaTeX ready to be downloaded as PDF",
+        "height": 304,
+        "width": 864,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        832,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "2ef2a718-6f3e-4cf4-a02a-cadec0bfdd0c",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Telegram\nto bypass the length limit I'm using google docs to put the giant prompt in it XD >:3\nfeel free to implement your own solution tho\n\nmessages go in HTML mode, so `_` in links or titles no longer breaks anything",
+        "height": 304,
+        "width": 784,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1680,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "35e7ceb2-53a5-4d04-95db-8db975acb2ec",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0,30 6-22 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -48,
+        0
+      ],
+      "id": "aa3da1f2-8fcd-4a33-a17f-f640c4a4e355",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================= CONFIG =================\n// Cole aqui as URLs de busca do LinkedIn, com os filtros que quiser (cargo, cidade, remoto...).\n// O filtro de tempo (f_TPR) e a ordenação (sortBy) são ajustados automaticamente lá embaixo,\n// então pode colar o link do jeito que ele aparece no navegador.\nconst buscas = [\n  // 2 buscas com OR. Só funciona sem aspas e sem parênteses: assim o LinkedIn soma os termos\n  // (com aspas/parênteses ele mistura tudo e um dos termos some). Ele ordena por relevância,\n  // então a busca de RPA vem primeiro pra não ficar sem vaga quando a de dev lotar as 10.\n  'https://www.linkedin.com/jobs/search/?keywords=RPA%20OR%20cientista&geoId=105871508',\n  'https://www.linkedin.com/jobs/search/?keywords=desenvolvedor%20OR%20IA&geoId=105871508',\n  // infra: sem essa busca quase não chega vaga de infra pra marcar quem acompanha infra. Descomente pra ativar:\n  // 'https://www.linkedin.com/jobs/search/?keywords=infraestrutura&geoId=105871508',\n  // busca booleana que estava na V2 (retirado pois o linkedin mudou o formato de sua pesquisa)\n\n  // 'https://www.linkedin.com/jobs/search/?f_PP=104746682&f_TPR=r1800&geoId=105871508&keywords=(%22Analista%20de%20Dados%22%20OR%20%22Data%20Analyst%22%20OR%20%22Data%20Scientist%22%20OR%20RPA%20OR%20Python%20OR%20%22Machine%20Learning%22%20OR%20Desenvolvedor)&sortBy=R',\n];\n\n// Máximo de vagas processadas por rodada, somando todas as buscas.\n// Se tiver mais que isso, as buscas do topo da lista têm prioridade.\nconst maxVagas = 10;\n\n// Quantas vagas o Apify traz por busca (cada vaga trazida é cobrada: US$ 0,002 no plano grátis).\n// A rodada das 6h00 pega um pouco mais porque cobre a madrugada inteira.\nconst vagasPorBusca = 5;\nconst vagasPorBuscaMadrugada = 10;\n\n// Habilidades que o ATS costuma procurar. As que aparecem na vaga vão pro prompt do currículo\n// e pra mensagem do Telegram (mesma lista do relatório semanal).\nconst habilidades = {\n  'Python': ['python'], 'SQL': ['sql'], 'Excel': ['excel'], 'Power BI': ['power bi', 'powerbi'],\n  'UiPath': ['uipath'], 'Power Automate': ['power automate'], 'Automation Anywhere': ['automation anywhere'],\n  'Blue Prism': ['blue prism'], 'Java': ['java'], 'C#/.NET': ['c#', '.net', 'dotnet'],\n  'JavaScript/TypeScript': ['javascript', 'typescript', 'node.js', 'nodejs'], 'React': ['react'],\n  'AWS': ['aws'], 'Azure': ['azure'], 'Google Cloud': ['gcp', 'google cloud'], 'Docker': ['docker'],\n  'Kubernetes': ['kubernetes', 'k8s'], 'Git': ['git', 'github', 'gitlab'], 'APIs REST': ['api', 'apis', 'restful'],\n  'Machine Learning': ['machine learning', 'scikit-learn', 'sklearn'],\n  'IA generativa/LLM': ['llm', 'llms', 'genai', 'ia generativa', 'generative ai', 'openai', 'langchain'],\n  'Pandas': ['pandas'], 'Spark': ['spark', 'pyspark'], 'Scrum/Ágil': ['scrum', 'ágil', 'agile', 'kanban'],\n  'Inglês': ['inglês', 'english'], 'Espanhol': ['espanhol', 'spanish'],\n};\n\n// Áreas: palavras-chave procuradas no TÍTULO da vaga.\n// Maiúsculas e acentos não importam, e a palavra tem que aparecer inteira (\"dev\" não bate com \"devops\").\n// exceto: palavras que tiram a vaga da área.\nconst palavrasRPA = ['rpa', 'automação de processos', 'hiperautomação', 'hyperautomation', 'uipath',\n  'automation anywhere', 'blue prism', 'power automate', 'process automation'];\nconst palavrasDev = ['desenvolvedor', 'desenvolvedora', 'developer', 'dev', 'programador', 'programadora',\n  'desenvolvimento de sistemas', 'desenvolvimento de software', 'analista de sistemas',\n  'engenheiro de software', 'engenheira de software', 'software engineer',\n  'backend', 'back-end', 'frontend', 'front-end', 'fullstack', 'full stack'];\nconst palavrasIA = ['ia', 'ai', 'inteligência artificial', 'artificial intelligence', 'machine learning', 'ml',\n  'deep learning', 'llm', 'llms', 'genai', 'ia generativa', 'generative ai', 'mlops', 'nlp',\n  'visão computacional', 'computer vision'];\nconst palavrasDados = ['cientista de dados', 'cientista dados', 'data scientist', 'ciência de dados', 'data science'];\n\nconst areas = {\n  'RPA': { palavras: palavrasRPA },\n  // \"Analista de Automação\" costuma ser RPA; as exceções tiram automação industrial, de testes e de marketing\n  'Automação': {\n    palavras: ['automação', 'automation'],\n    exceto: ['industrial', 'elétrica', 'mecatrônica', 'clp', 'plc', 'scada', 'predial', 'residencial',\n      'teste', 'testes', 'test', 'testing', 'qa', 'marketing'],\n  },\n  'Infra': {\n    palavras: ['infraestrutura', 'infra', 'infrastructure', 'sysadmin', 'administrador de sistemas',\n      'system administrator', 'devops', 'sre', 'site reliability', 'cloud', 'linux', 'windows server',\n      'datacenter', 'data center', 'noc', 'analista de redes', 'técnico de redes', 'engenheiro de redes',\n      'administrador de redes', 'network engineer', 'network administrator', 'suporte técnico',\n      'suporte de ti', 'help desk', 'helpdesk', 'service desk'],\n    exceto: ['redes sociais', 'social media'],\n  },\n  // dev, IA e ciência de dados juntos; vaga com RPA no título fica só com o pessoal de RPA\n  'Dev / IA / Dados': {\n    palavras: [...palavrasDev, ...palavrasIA, ...palavrasDados],\n    exceto: palavrasRPA,\n  },\n};\n\n// Quem marcar no Telegram, e em quais áreas.\n// telegram: o @username da pessoa ou o ID numérico (ela descobre o dela mandando uma mensagem pro @userinfobot).\n//           Vazio = aparece só o nome, sem notificar. A pessoa precisa estar no grupo pra ser notificada.\nconst interessados = [\n  { nome: 'Pessoa de RPA', telegram: '', areas: ['RPA', 'Automação'] },\n  { nome: 'Pessoa de infra', telegram: '', areas: ['Infra'] },\n  { nome: 'Pessoa de dev', telegram: '', areas: ['Dev / IA / Dados'] },\n];\n// ==========================================\n\n// O workflow roda a cada 30 min, das 6h00 às 22h30, e pega só vagas dos últimos 30 min (menos concorrência).\n// A rodada das 6h00 cobre a madrugada (22h30 -> 6h00); as outras cobrem 30 min + 5 min de folga.\n// As vagas repetidas por causa da folga são descartadas no nó \"Vagas novas\".\nconst primeiraDoDia = $now.hour === 6 && $now.minute < 30;\nconst janelaSegundos = primeiraDoDia ? 7.5 * 3600 + 300 : 30 * 60 + 300;\nconst limitePorBusca = primeiraDoDia ? vagasPorBuscaMadrugada : vagasPorBusca;\n\nconst urls = buscas.map((u) => {\n  const [base, query = ''] = u.split('?');\n  const params = query.split('&').filter((p) => p && !/^(f_TPR|sortBy)=/.test(p));\n  params.push(`f_TPR=r${janelaSegundos}`, 'sortBy=DD');\n  return `${base}?${params.join('&')}`;\n});\n\n// Monta a marcação de cada pessoa já no formato HTML que o Telegram entende\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst pessoas = interessados.map(({ nome, telegram = '', areas: suasAreas = [] }) => {\n  const errada = suasAreas.find((a) => !areas[a]);\n  if (errada) throw new Error(`Config: a área \"${errada}\" de ${nome} não existe. As áreas são: ${Object.keys(areas).join(', ')}`);\n  const t = telegram.trim();\n  let mencao;\n  if (!t) mencao = `<b>${esc(nome)}</b>`;\n  else if (/^@[A-Za-z][A-Za-z0-9_]{3,31}$/.test(t)) mencao = t;\n  else if (/^\\d+$/.test(t)) mencao = `<a href=\"tg://user?id=${t}\">${esc(nome)}</a>`;\n  else throw new Error(`Config: o telegram de ${nome} precisa ser um @username ou um ID numérico (veio \"${telegram}\")`);\n  return { nome, mencao, areas: suasAreas };\n});\n\nreturn [{ json: { urls, maxVagas, limitePorBusca, areas, interessados: pessoas, habilidades } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        64
+      ],
+      "id": "cfc3e034-7a0e-4cf2-ad1d-21ebcc49025b",
+      "name": "Config"
+    },
+    {
+      "parameters": {
+        "operation": "Run actor and get dataset",
+        "actorId": {
+          "__rl": true,
+          "value": "hKByXkMQaC5Qt9UMN",
+          "mode": "list",
+          "cachedResultName": "Linkedin Jobs Scraper (curious_coder/linkedin-jobs-scraper)",
+          "cachedResultUrl": "https://console.apify.com/actors/hKByXkMQaC5Qt9UMN/input"
+        },
+        "customBody": "={\n  \"limitPerSource\": {{ $json.limitePorBusca }},\n  \"scrapeCompany\": true,\n  \"splitByLocation\": false,\n  \"urls\": {{ JSON.stringify($json.urls) }}\n}"
+      },
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        544,
+        0
+      ],
+      "id": "c1dbad5a-7fff-43a8-99c0-a1ce82dc1f30",
+      "name": "scraped jobs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deixa passar só as vagas novas de verdade:\n// 1. postadas hoje (ou desde ontem, na rodada das 6h00, que cobre a madrugada).\n//    O Apify completa o resultado com vagas antigas quando a busca não tem vagas suficientes;\n// 2. que ainda não foram processadas: a mesma vaga pode aparecer em duas buscas\n//    ou em duas rodadas seguidas, por causa da folga de 5 min;\n// 3. no máximo `maxVagas` por rodada (definido no nó Config).\n// Os IDs ficam guardados nos dados estáticos do workflow por 30 dias.\n// Obs.: o n8n só grava esses dados em execuções automáticas (workflow ativo),\n// então em testes manuais as vagas não ficam marcadas como vistas.\nconst { maxVagas } = $('Config').first().json;\nconst primeiraDoDia = $now.hour === 6 && $now.minute < 30;\nconst desde = (primeiraDoDia ? $today.minus({ days: 1 }) : $today).toISODate();\n\nconst memoria = $getWorkflowStaticData('global');\nconst vistas = memoria.vagasVistas ?? {};\nconst agora = Date.now();\nconst TRINTA_DIAS = 30 * 24 * 60 * 60 * 1000;\n\nfor (const [id, quando] of Object.entries(vistas)) {\n  if (agora - quando > TRINTA_DIAS) delete vistas[id];\n}\n\nconst novas = [];\n$input.all().forEach((item, i) => {\n  const id = String(item.json.id ?? String(item.json.link ?? '').split('?')[0]);\n  const postada = String(item.json.postedAt ?? '');\n  // se a data vier num formato inesperado, não descarta (melhor uma vaga a mais que zero vagas)\n  const antiga = /^\\d{4}-\\d{2}-\\d{2}/.test(postada) && postada.slice(0, 10) < desde;\n  if (novas.length >= maxVagas || !id || antiga || vistas[id]) return;\n  vistas[id] = agora;\n  novas.push({ json: item.json, pairedItem: { item: i } });\n});\n\nmemoria.vagasVistas = vistas;\nreturn novas;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "id": "b0a59c25-e8f0-47f9-b647-21cb721eda05",
+      "name": "Vagas novas"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        896,
+        -16
+      ],
+      "id": "5a8187ad-0380-4058-9cf4-0e48af5ef91e",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Roda uma vez para cada vaga. Edite o texto do prompt e o título do doc à vontade.\nconst config = $('Config').first().json;\n\n// alguns textos vêm com código HTML (\"QA&#32\", \"P&amp;D\")\nconst decodifica = (s) => String(s ?? '')\n  .replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n  .replace(/&#(\\d+);?/g, (_, d) => String.fromCodePoint(Number(d)))\n  .replace(/&quot;/g, '\"').replace(/&#39;|&apos;/g, \"'\").replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&amp;/g, '&')\n  .trim();\nconst vaga = { ...$json, title: decodifica($json.title), companyName: decodifica($json.companyName) };\n\n// Compara textos ignorando maiúsculas e acentos, e só vale palavra inteira (\"dev\" não bate com \"devops\")\nconst normaliza = (s) =>\n  ` ${String(s ?? '').normalize('NFD').replace(/\\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9#+]+/g, ' ').trim()} `;\nconst contem = (texto, termos = []) => termos.some((t) => normaliza(t).trim() && texto.includes(normaliza(t)));\nconst titulo = normaliza(vaga.title);\nconst textoVaga = normaliza(`${vaga.title} ${vaga.descriptionText ?? ''}`);\n\n// Palavras-chave que o ATS desta vaga deve procurar (lista no nó Config)\nconst palavrasChave = Object.entries(config.habilidades ?? {})\n  .filter(([, termos]) => contem(textoVaga, termos))\n  .map(([nome]) => nome);\n\nconst prompt = `Gere o currículo e a carta para esta vaga:\n\nCargo: ${vaga.title}\nEmpresa: ${vaga.companyName}\n${palavrasChave.length ? `Palavras-chave que o ATS desta vaga deve procurar: ${palavrasChave.join(', ')}\n(use esses termos exatamente assim no currículo e na carta, mas só os que eu realmente tenho)\n` : ''}Descrição: ${vaga.descriptionText}`;\n\nconst titulo_cv = `CV - Seu Nome - ${vaga.companyName}`;\n\n// Concorrência: o LinkedIn mostra \"seja um dos 25 primeiros\" (vem como 25) e para de contar em 200\nconst bruto = String(vaga.applicantsCount ?? '').replace(/\\D/g, '');\nconst nCandidatos = bruto === '' ? null : Number(bruto);\nconst candidatos = nCandidatos === null ? null\n  : nCandidatos <= 25 ? 'até 25 candidatos 🟢'\n  : `${nCandidatos}${nCandidatos >= 200 ? '+' : ''} candidatos ${nCandidatos < 100 ? '🟡' : '🔴'}`;\n\n// Mensagem do Telegram em HTML: só &, < e > precisam de escape\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst local = [vaga.location, vaga.companyAddress?.streetAddress].filter(Boolean).join(', ');\nconst linkVaga = String(vaga.link ?? '').split('?')[0];\n\nconst msg = [\n  `🎯 <b>${esc(vaga.title)}</b>`,\n  `🏢 ${esc(vaga.companyName)}`,\n  candidatos && `👥 ${candidatos}`,\n  local && `📍 ${esc(local)}`,\n  palavrasChave.length && `🧩 ${esc(palavrasChave.join(' · '))}`,\n  linkVaga && `📶 <a href=\"${esc(linkVaga)}\">Ver vaga no LinkedIn</a>`,\n].filter(Boolean).join('\\n\\n');\n\n// Quem marcar: descobre as áreas da vaga pelo título (palavras-chave do nó Config)\n// e marca quem acompanha alguma delas.\nconst areasDaVaga = Object.keys(config.areas)\n  .filter((a) => contem(titulo, config.areas[a].palavras) && !contem(titulo, config.areas[a].exceto));\nconst mencoes = [...new Set(config.interessados\n  .filter((p) => p.areas.some((a) => areasDaVaga.includes(a)))\n  .map((p) => p.mencao))];\n\nreturn {\n  json: {\n    ...vaga,\n    // o Apify manda o salário em \"salary\" (quase nunca preenchido no Brasil)\n    salario: String(vaga.salary ?? '').trim() || (vaga.salaryInfo ?? []).filter(Boolean).join(' – '),\n    palavras_chave: palavrasChave.join(', '),\n    prompt,\n    titulo_cv,\n    msg,\n    areas_da_vaga: areasDaVaga.join(', '),\n    // vai no fim da mensagem do Telegram; vazio quando a vaga não é de nenhuma área\n    marcar: mencoes.length ? `\\n\\n🔔 ${mencoes.join(' ')}` : '',\n  },\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -16
+      ],
+      "id": "e1b103cd-6ea7-47c1-866d-395d567179e0",
+      "name": "Monta prompt"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Job Title ": "={{ $('Monta prompt').item.json.title }}",
+            "Job Post Link": "={{ $('Monta prompt').item.json.link }}",
+            "Seniority Level": "={{ $('Monta prompt').item.json.seniorityLevel }}",
+            "Posted At": "={{ $('Monta prompt').item.json.postedAt }}",
+            "Company Name": "={{ $('Monta prompt').item.json.companyName }}",
+            "Company Website": "={{ $('Monta prompt').item.json.companyWebsite }}",
+            "Salary": "={{ $('Monta prompt').item.json.salario }}",
+            "No Aplicants ": "={{ $('Monta prompt').item.json.applicantsCount }}",
+            "Description": "={{ $('Monta prompt').item.json.descriptionText }}",
+            "prompt": "=https://docs.google.com/document/d/{{ $('Create a document').item.json.id }}/edit",
+            "titulo CV": "={{ $('Monta prompt').item.json.titulo_cv }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Job Post Link",
+              "displayName": "Job Post Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Job Title ",
+              "displayName": "Job Title ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Seniority Level",
+              "displayName": "Seniority Level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Posted At",
+              "displayName": "Posted At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Company Name",
+              "displayName": "Company Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Company Website",
+              "displayName": "Company Website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Salary",
+              "displayName": "Salary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Description",
+              "displayName": "Description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "No Aplicants ",
+              "displayName": "No Aplicants ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Resume URL",
+              "displayName": "Resume URL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "prompt",
+              "displayName": "prompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "titulo CV",
+              "displayName": "titulo CV",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1808,
+        96
+      ],
+      "id": "ccdbf06b-b888-4600-b00f-fec881575afd",
+      "name": "Append row in sheet",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "folderId": "ID_DA_PASTA_NO_DRIVE",
+        "title": "={{ $('Monta prompt').item.json.titulo_cv }}"
+      },
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        1392,
+        96
+      ],
+      "id": "d332cb10-dd92-4116-a18a-016158ad14ad",
+      "name": "Create a document",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ $json.id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "insert",
+              "text": "={{ $('Monta prompt').item.json.prompt }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        96
+      ],
+      "id": "2ff865de-d1eb-4727-a32e-6df0cef92414",
+      "name": "Update a document",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2032,
+        96
+      ],
+      "id": "6798a53a-8071-42a6-bc3c-a9dbd8fd3e3d",
+      "name": "Wait"
+    },
+    {
+      "parameters": {
+        "chatId": "SEU_CHAT_ID",
+        "text": "={{ $('Monta prompt').item.json.msg }}\n\n😺 <a href=\"https://docs.google.com/document/d/{{ $('Create a document').item.json.id }}/edit\">Abrir prompt do CV</a>{{ $('Monta prompt').item.json.marcar }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2240,
+        96
+      ],
+      "id": "e47f2468-e8cb-4bd0-803a-ac6132c129db",
+      "name": "Send a text message",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "scraped jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "scraped jobs": {
+      "main": [
+        [
+          {
+            "node": "Vagas novas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vagas novas": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Monta prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monta prompt": {
+      "main": [
+        [
+          {
+            "node": "Create a document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a document": {
+      "main": [
+        [
+          {
+            "node": "Update a document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update a document": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timezone": "America/Sao_Paulo"
+  },
+  "pinData": {},
+  "active": false,
+  "tags": []
+}
